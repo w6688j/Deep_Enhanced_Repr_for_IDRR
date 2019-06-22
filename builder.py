@@ -116,7 +116,7 @@ class ModelBuilder(object):
                 self.con_optimizer.step()
             
             total_loss += loss.data * sense.size(0)
-        return total_loss[0] / train_size, correct_n[0] / train_size
+        return total_loss[0] / train_size, correct_n[0].float() / train_size
 
     def _train(self, pre):
         for epoch in range(self.conf.epochs):            
@@ -199,7 +199,7 @@ class ModelBuilder(object):
             f1 = f1_score(gold_s.cpu().data.numpy(), output_s.cpu().data.numpy(), average='binary')
         else:
             f1 = f1_score(gold_s.cpu().data.numpy(), output_s.cpu().data.numpy(), average='macro')
-        return total_loss[0] / n, correct_n[0] / n, f1
+        return total_loss[0] / n, correct_n[0].float() / n, f1
 
     def eval(self, pre):
         print('evaluating...')
