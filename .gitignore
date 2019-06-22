@@ -120,3 +120,4 @@ dmypy.json
 /result/
 /data/
 /weights/
+/config.py
