@@ -118,3 +118,5 @@ dmypy.json
 .idea/
 /model/
 /result/
+/data/
+/weights/
