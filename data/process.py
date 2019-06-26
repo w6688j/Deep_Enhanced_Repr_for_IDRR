@@ -47,6 +47,11 @@ class PreData(object):
             self.arg2_train_r = pickle.load(f)
             self.conn_train_r = pickle.load(f)
             self.sense_train_r = pickle.load(f)
+
+            # self.arg1_train_r = self.arg1_train_r[:3000]
+            # self.arg2_train_r = self.arg2_train_r[:3000]
+            # self.conn_train_r = self.conn_train_r[:3000]
+            # self.sense_train_r = self.sense_train_r[:3000]
         with open(path_pre + 'dev.pkl', 'rb') as f:
             self.arg1_dev_r = pickle.load(f)
             self.arg2_dev_r = pickle.load(f)
