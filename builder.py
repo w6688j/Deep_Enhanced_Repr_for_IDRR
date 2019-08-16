@@ -7,13 +7,14 @@ from sklearn.metrics import f1_score
 from data import Data
 from model import ArgEncoder, Classifier
 
+
 class ModelBuilder(object):
     def __init__(self, use_cuda, conf):
         self.cuda = use_cuda
         self.conf = conf
         self._pre_data()
         self._build_model()
-    
+
     def _pre_data(self):
         print('pre data...')
         self.data = Data(self.cuda, self.conf)
@@ -26,13 +27,13 @@ class ModelBuilder(object):
             pre = './data/processed/ji/'
         elif self.conf.corpus_splitting == 3:
             pre = './data/processed/l/'
-        we = torch.load(pre+'we.pkl')
+        we = torch.load(pre + 'we.pkl')
         char_table = None
         sub_table = None
         if self.conf.need_char or self.conf.need_elmo:
-            char_table = torch.load(pre+'char_table.pkl')
+            char_table = torch.load(pre + 'char_table.pkl')
         if self.conf.need_sub:
-            sub_table = torch.load(pre+'sub_table.pkl')
+            sub_table = torch.load(pre + 'sub_table.pkl')
         print('building model...')
         self.encoder = ArgEncoder(self.conf, we, char_table, sub_table, self.cuda)
         self.classifier = Classifier(self.conf.clf_class_num, self.conf)
@@ -45,10 +46,13 @@ class ModelBuilder(object):
                 self.conn_classifier.cuda()
         self.criterion = torch.nn.CrossEntropyLoss()
         para_filter = lambda model: filter(lambda p: p.requires_grad, model.parameters())
-        self.e_optimizer = torch.optim.Adagrad(para_filter(self.encoder), self.conf.lr, weight_decay=self.conf.l2_penalty)
-        self.c_optimizer = torch.optim.Adagrad(para_filter(self.classifier), self.conf.lr, weight_decay=self.conf.l2_penalty)
+        self.e_optimizer = torch.optim.Adagrad(para_filter(self.encoder), self.conf.lr,
+                                               weight_decay=self.conf.l2_penalty)
+        self.c_optimizer = torch.optim.Adagrad(para_filter(self.classifier), self.conf.lr,
+                                               weight_decay=self.conf.l2_penalty)
         if self.conf.is_mttrain:
-            self.con_optimizer = torch.optim.Adagrad(para_filter(self.conn_classifier), self.conf.lr, weight_decay=self.conf.l2_penalty)
+            self.con_optimizer = torch.optim.Adagrad(para_filter(self.conn_classifier), self.conf.lr,
+                                                     weight_decay=self.conf.l2_penalty)
 
     def _print_train(self, epoch, time, loss, acc):
         print('-' * 80)
@@ -61,7 +65,7 @@ class ModelBuilder(object):
 
     def _print_eval(self, task, loss, acc, f1):
         print(
-            '| ' + task + ' loss {:10.5f} | acc {:5.2f}% | f1 {:5.2f}%'.format(loss, acc * 100, f1*100)
+            '| ' + task + ' loss {:10.5f} | acc {:5.2f}% | f1 {:5.2f}%'.format(loss, acc * 100, f1 * 100)
         )
         print('-' * 80)
 
@@ -114,34 +118,36 @@ class ModelBuilder(object):
             self.c_optimizer.step()
             if self.conf.is_mttrain:
                 self.con_optimizer.step()
-            
+
             total_loss += loss.data * sense.size(0)
         return total_loss[0] / train_size, correct_n[0].float() / train_size
 
     def _train(self, pre):
-        for epoch in range(self.conf.epochs):            
+        for epoch in range(self.conf.epochs):
             start_time = time.time()
             loss, acc = self._train_one()
-            self._print_train(epoch, time.time()-start_time, loss, acc)
+            self._print_train(epoch, time.time() - start_time, loss, acc)
             self.logwriter.add_scalar('loss/train_loss', loss, epoch)
-            self.logwriter.add_scalar('acc/train_acc', acc*100, epoch)
+            self.logwriter.add_scalar('acc/train_acc', acc * 100, epoch)
 
             dev_loss, dev_acc, dev_f1 = self._eval('dev')
             self._print_eval('dev', dev_loss, dev_acc, dev_f1)
             self.logwriter.add_scalar('loss/dev_loss', dev_loss, epoch)
-            self.logwriter.add_scalar('acc/dev_acc', dev_acc*100, epoch)
-            self.logwriter.add_scalar('f1/dev_f1', dev_f1*100, epoch)
+            self.logwriter.add_scalar('acc/dev_acc', dev_acc * 100, epoch)
+            self.logwriter.add_scalar('f1/dev_f1', dev_f1 * 100, epoch)
 
             test_loss, test_acc, test_f1 = self._eval('test')
             self._print_eval('test', test_loss, test_acc, test_f1)
             self.logwriter.add_scalar('loss/test_loss', test_loss, epoch)
-            self.logwriter.add_scalar('acc/test_acc', test_acc*100, epoch)
-            self.logwriter.add_scalar('f1/test_f1', test_f1*100, epoch)
+            self.logwriter.add_scalar('acc/test_acc', test_acc * 100, epoch)
+            self.logwriter.add_scalar('f1/test_f1', test_f1 * 100, epoch)
 
     def train(self, pre):
         print('start training')
         self.logwriter = SummaryWriter(self.conf.logdir)
         self._train(pre)
+        self._save_model(self.encoder, pre + '_eparams.pkl')
+        self._save_model(self.classifier, pre + '_cparams.pkl')
         print('training done')
 
     def _eval(self, task):
@@ -169,8 +175,8 @@ class ModelBuilder(object):
                 mask1 = (sense2 == self.conf.binclass)
                 mask2 = (sense2 != self.conf.binclass)
                 sense2[mask1] = 1
-                sense2[mask2] = 0  
-                sense2[mask0] = -1              
+                sense2[mask2] = 0
+                sense2[mask0] = -1
             if self.cuda:
                 a1, a2, sense1, sense2 = a1.cuda(), a2.cuda(), sense1.cuda(), sense2.cuda()
             a1 = Variable(a1, volatile=True)
@@ -192,7 +198,7 @@ class ModelBuilder(object):
 
             loss = self.criterion(output, gold_sense)
             total_loss += loss.data * gold_sense.size(0)
-        
+
         output_s = torch.cat(output_list)
         gold_s = torch.cat(gold_list)
         if self.conf.four_or_eleven == 2:
@@ -203,7 +209,7 @@ class ModelBuilder(object):
 
     def eval(self, pre):
         print('evaluating...')
-        self._load_model(self.encoder, pre+'_eparams.pkl')
-        self._load_model(self.classifier, pre+'_cparams.pkl')
+        self._load_model(self.encoder, pre + '_eparams.pkl')
+        self._load_model(self.classifier, pre + '_cparams.pkl')
         test_loss, test_acc, f1 = self._eval('test')
         self._print_eval('test', test_loss, test_acc, f1)
