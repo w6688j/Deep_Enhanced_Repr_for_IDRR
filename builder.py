@@ -1,8 +1,11 @@
+import logging
 import time
+from datetime import datetime
+
 import torch
-from torch.autograd import Variable
-from tensorboardX import SummaryWriter
 from sklearn.metrics import f1_score
+from tensorboardX import SummaryWriter
+from torch.autograd import Variable
 
 from data import Data
 from model import ArgEncoder, Classifier
@@ -54,6 +57,13 @@ class ModelBuilder(object):
             self.con_optimizer = torch.optim.Adagrad(para_filter(self.conn_classifier), self.conf.lr,
                                                      weight_decay=self.conf.l2_penalty)
 
+        logging.basicConfig(
+            filename='logs/train_' + datetime.now().strftime(
+                '%B%d-%H_%M_%S') + '_' + self.conf.type + '.log',
+            filemode='a',
+            format='%(asctime)s - %(levelname)s: %(message)s',
+            level=logging.DEBUG)
+
     def _print_train(self, epoch, time, loss, acc):
         print('-' * 80)
         print(
@@ -62,12 +72,23 @@ class ModelBuilder(object):
             )
         )
         print('-' * 80)
+        logging.debug('-' * 80)
+        logging.debug(
+            '| end of epoch {:3d} | time: {:5.2f}s | loss: {:10.5f} | acc: {:5.2f}% |'.format(
+                epoch, time, loss, acc * 100
+            )
+        )
+        logging.debug('-' * 80)
 
     def _print_eval(self, task, loss, acc, f1):
         print(
             '| ' + task + ' loss {:10.5f} | acc {:5.2f}% | f1 {:5.2f}%'.format(loss, acc * 100, f1 * 100)
         )
         print('-' * 80)
+        logging.debug(
+            '| ' + task + ' loss {:10.5f} | acc {:5.2f}% | f1 {:5.2f}%'.format(loss, acc * 100, f1 * 100)
+        )
+        logging.debug('-' * 80)
 
     def _save_model(self, model, filename):
         torch.save(model.state_dict(), './weights/' + filename)
@@ -144,11 +165,13 @@ class ModelBuilder(object):
 
     def train(self, pre):
         print('start training')
+        logging.debug('start training')
         self.logwriter = SummaryWriter(self.conf.logdir)
         self._train(pre)
         self._save_model(self.encoder, pre + '_eparams.pkl')
         self._save_model(self.classifier, pre + '_cparams.pkl')
         print('training done')
+        logging.debug('training done')
 
     def _eval(self, task):
         self.encoder.eval()
@@ -209,6 +232,7 @@ class ModelBuilder(object):
 
     def eval(self, pre):
         print('evaluating...')
+        logging.debug('evaluating...')
         self._load_model(self.encoder, pre + '_eparams.pkl')
         self._load_model(self.classifier, pre + '_cparams.pkl')
         test_loss, test_acc, f1 = self._eval('test')
