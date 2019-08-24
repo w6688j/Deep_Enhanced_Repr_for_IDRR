@@ -1,26 +1,62 @@
 import logging
+import os
+import pickle
 import time
 from datetime import datetime
 
+import h5py
+import numpy as np
+import spacy
 import torch
 from sklearn.metrics import f1_score
 from tensorboardX import SummaryWriter
+from torch import nn
 from torch.autograd import Variable
 
 from data import Data
-from model import ArgEncoder, Classifier
+from model import ArgEncoder, ArgEncoderSentImg2, ArgEncoderPhrImg, ArgEncoderImgSelf, Classifier
 
+
+# import os
+# os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 
 class ModelBuilder(object):
-    def __init__(self, use_cuda, conf):
+    def __init__(self, use_cuda, conf, model_name):
         self.cuda = use_cuda
         self.conf = conf
+        self.model_name = model_name
+        self._init_log()
         self._pre_data()
         self._build_model()
 
     def _pre_data(self):
         print('pre data...')
         self.data = Data(self.cuda, self.conf)
+        self.spacy = spacy.load('en')
+        # print('pre train SenImg pickle...')
+        # self.img_pickle_train = self._load_text_img_pickle_all('train')
+        # print('pre dev SenImg pickle...')
+        # self.img_pickle_dev = self._load_text_img_pickle_all('dev')
+        # print('pre test SenImg pickle...')
+        # self.img_pickle_test = self._load_text_img_pickle_all('test')
+
+    def _init_log(self):
+        if self.conf.four_or_eleven == 2:
+            filename = 'logs/train_' + datetime.now().strftime(
+                '%B%d-%H_%M_%S') + '_' + self.model_name + self.conf.type + '_' + self.conf.i2senseclass[
+                           self.conf.binclass]
+        else:
+            filename = 'logs/train_' + datetime.now().strftime(
+                '%B%d-%H_%M_%S') + '_' + self.model_name + '_' + self.conf.type
+
+        if self.conf.need_elmo:
+            filename += '_ELMO'
+
+        logging.basicConfig(
+            filename=filename + '.log',
+            filemode='a',
+            format='%(asctime)s - %(levelname)s: %(message)s',
+            level=logging.DEBUG)
 
     def _build_model(self):
         print('loading embedding...')
@@ -38,7 +74,14 @@ class ModelBuilder(object):
         if self.conf.need_sub:
             sub_table = torch.load(pre + 'sub_table.pkl')
         print('building model...')
-        self.encoder = ArgEncoder(self.conf, we, char_table, sub_table, self.cuda)
+        if self.model_name == 'ArgSenImg':
+            self.encoder = ArgEncoderSentImg2(self.conf, we, char_table, sub_table, self.cuda, None, self.spacy)
+        elif self.model_name == 'ArgPhrImg':
+            self.encoder = ArgEncoderPhrImg(self.conf, we, char_table, sub_table, self.cuda, None, self.spacy)
+        elif self.model_name == 'ArgImgSelf':
+            self.encoder = ArgEncoderImgSelf(self.conf, we, char_table, sub_table, self.cuda, None, self.spacy)
+        else:
+            self.encoder = ArgEncoder(self.conf, we, char_table, sub_table, self.cuda)
         self.classifier = Classifier(self.conf.clf_class_num, self.conf)
         if self.conf.is_mttrain:
             self.conn_classifier = Classifier(self.conf.conn_num, self.conf)
@@ -47,6 +90,7 @@ class ModelBuilder(object):
             self.classifier.cuda()
             if self.conf.is_mttrain:
                 self.conn_classifier.cuda()
+
         self.criterion = torch.nn.CrossEntropyLoss()
         para_filter = lambda model: filter(lambda p: p.requires_grad, model.parameters())
         self.e_optimizer = torch.optim.Adagrad(para_filter(self.encoder), self.conf.lr,
@@ -56,13 +100,6 @@ class ModelBuilder(object):
         if self.conf.is_mttrain:
             self.con_optimizer = torch.optim.Adagrad(para_filter(self.conn_classifier), self.conf.lr,
                                                      weight_decay=self.conf.l2_penalty)
-
-        logging.basicConfig(
-            filename='logs/train_' + datetime.now().strftime(
-                '%B%d-%H_%M_%S') + '_' + self.conf.type + '.log',
-            filemode='a',
-            format='%(asctime)s - %(levelname)s: %(message)s',
-            level=logging.DEBUG)
 
     def _print_train(self, epoch, time, loss, acc):
         print('-' * 80)
@@ -104,43 +141,66 @@ class ModelBuilder(object):
         total_loss = 0
         correct_n = 0
         train_size = self.data.train_size
-        for a1, a2, sense, conn in self.data.train_loader:
-            if self.conf.four_or_eleven == 2:
-                mask1 = (sense == self.conf.binclass)
-                mask2 = (sense != self.conf.binclass)
-                sense[mask1] = 1
-                sense[mask2] = 0
-            if self.cuda:
-                a1, a2, sense, conn = a1.cuda(), a2.cuda(), sense.cuda(), conn.cuda()
-            a1, a2, sense, conn = Variable(a1), Variable(a2), Variable(sense), Variable(conn)
-            repr = self.encoder(a1, a2)
-            output = self.classifier(repr)
-            _, output_sense = torch.max(output, 1)
-            assert output_sense.size() == sense.size()
-            tmp = (output_sense == sense).long()
-            correct_n += torch.sum(tmp).data
-            loss = self.criterion(output, sense)
+        for i, (a1, a2, sense, conn, arg1_sen, arg2_sen) in enumerate(self.data.train_loader):
+            try:
+                start_time = time.time()
+                if self.conf.four_or_eleven == 2:
+                    mask1 = (sense == self.conf.binclass)
+                    mask2 = (sense != self.conf.binclass)
+                    sense[mask1] = 1
+                    sense[mask2] = 0
+                if self.cuda:
+                    a1, a2, sense, conn = a1.cuda(), a2.cuda(), sense.cuda(), conn.cuda()
+                a1, a2, sense, conn = Variable(a1), Variable(a2), Variable(sense), Variable(conn)
+                if self.model_name in ['ArgImg', 'ArgSenImg', 'ArgPhrImg', 'ArgImgSelf']:
+                    self._load_text_img_pickle_index(i)
+                    # img_pickle = self.img_pickle_train[i]
+                    repr = self.encoder(a1, a2, arg1_sen, arg2_sen,
+                                        self.text_pkl,
+                                        self.img_pkl,
+                                        self.phrase_text_pkl,
+                                        self.phrase_img_pkl, i, 'train')
+                else:
+                    repr = self.encoder(a1, a2)
+                output = self.classifier(repr)
+                _, output_sense = torch.max(output, 1)
+                assert output_sense.size() == sense.size()
+                tmp = (output_sense == sense).long()
+                correct_n += torch.sum(tmp).data
+                loss = self.criterion(output, sense)
 
-            if self.conf.is_mttrain:
-                conn_output = self.conn_classifier(repr)
-                loss2 = self.criterion(conn_output, conn)
-                loss = loss + loss2 * self.conf.lambda1
+                if self.conf.is_mttrain:
+                    conn_output = self.conn_classifier(repr)
+                    loss2 = self.criterion(conn_output, conn)
+                    loss = loss + loss2 * self.conf.lambda1
 
-            self.e_optimizer.zero_grad()
-            self.c_optimizer.zero_grad()
-            if self.conf.is_mttrain:
-                self.con_optimizer.zero_grad()
-            loss.backward()
-            torch.nn.utils.clip_grad_norm(self.encoder.parameters(), self.conf.grad_clip)
-            torch.nn.utils.clip_grad_norm(self.classifier.parameters(), self.conf.grad_clip)
-            if self.conf.is_mttrain:
-                torch.nn.utils.clip_grad_norm(self.conn_classifier.parameters(), self.conf.grad_clip)
-            self.e_optimizer.step()
-            self.c_optimizer.step()
-            if self.conf.is_mttrain:
-                self.con_optimizer.step()
+                self.e_optimizer.zero_grad()
+                self.c_optimizer.zero_grad()
+                if self.conf.is_mttrain:
+                    self.con_optimizer.zero_grad()
+                loss.backward()
+                torch.nn.utils.clip_grad_norm(self.encoder.parameters(), self.conf.grad_clip)
+                torch.nn.utils.clip_grad_norm(self.classifier.parameters(), self.conf.grad_clip)
+                if self.conf.is_mttrain:
+                    torch.nn.utils.clip_grad_norm(self.conn_classifier.parameters(), self.conf.grad_clip)
+                self.e_optimizer.step()
+                self.c_optimizer.step()
+                if self.conf.is_mttrain:
+                    self.con_optimizer.step()
 
-            total_loss += loss.data * sense.size(0)
+                total_loss += loss.data * sense.size(0)
+                if self.model_name in ['ArgImg', 'ArgSenImg', 'ArgPhrImg']:
+                    print('==================' + str(i) + '==================')
+                    print('total_loss:' + str(total_loss[0] / (len(arg1_sen) * (i + 1))) + ' acc:' + str(
+                        correct_n[0].float() / (len(arg1_sen) * (i + 1))) + ' time:' + str(time.time() - start_time))
+                    logging.debug('==================' + str(i) + '==================')
+                    logging.debug('total_loss:' + str(total_loss[0] / (len(arg1_sen) * (i + 1))) + ' acc:' + str(
+                        correct_n[0].float() / (len(arg1_sen) * (i + 1))) + ' time:' + str(time.time() - start_time))
+            except Exception as e:
+                print(e)
+                logging.debug(e)
+                continue
+
         return total_loss[0] / train_size, correct_n[0].float() / train_size
 
     def _train(self, pre):
@@ -188,46 +248,66 @@ class ModelBuilder(object):
             raise Exception('wrong eval task')
         output_list = []
         gold_list = []
-        for a1, a2, sense1, sense2 in data:
-            if self.conf.four_or_eleven == 2:
-                mask1 = (sense1 == self.conf.binclass)
-                mask2 = (sense1 != self.conf.binclass)
-                sense1[mask1] = 1
-                sense1[mask2] = 0
-                mask0 = (sense2 == -1)
-                mask1 = (sense2 == self.conf.binclass)
-                mask2 = (sense2 != self.conf.binclass)
-                sense2[mask1] = 1
-                sense2[mask2] = 0
-                sense2[mask0] = -1
-            if self.cuda:
-                a1, a2, sense1, sense2 = a1.cuda(), a2.cuda(), sense1.cuda(), sense2.cuda()
-            a1 = Variable(a1, volatile=True)
-            a2 = Variable(a2, volatile=True)
-            sense1 = Variable(sense1, volatile=True)
-            sense2 = Variable(sense2, volatile=True)
+        for i, (a1, a2, sense1, sense2, arg1_sen, arg2_sen) in enumerate(data):
+            try:
+                if self.conf.four_or_eleven == 2:
+                    mask1 = (sense1 == self.conf.binclass)
+                    mask2 = (sense1 != self.conf.binclass)
+                    sense1[mask1] = 1
+                    sense1[mask2] = 0
+                    mask0 = (sense2 == -1)
+                    mask1 = (sense2 == self.conf.binclass)
+                    mask2 = (sense2 != self.conf.binclass)
+                    sense2[mask1] = 1
+                    sense2[mask2] = 0
+                    sense2[mask0] = -1
+                if self.cuda:
+                    a1, a2, sense1, sense2 = a1.cuda(), a2.cuda(), sense1.cuda(), sense2.cuda()
+                a1 = Variable(a1, volatile=True)
+                a2 = Variable(a2, volatile=True)
+                sense1 = Variable(sense1, volatile=True)
+                sense2 = Variable(sense2, volatile=True)
 
-            output = self.classifier(self.encoder(a1, a2))
-            _, output_sense = torch.max(output, 1)
-            assert output_sense.size() == sense1.size()
-            gold_sense = sense1
-            mask = (output_sense == sense2)
-            gold_sense[mask] = sense2[mask]
-            tmp = (output_sense == gold_sense).long()
-            correct_n += torch.sum(tmp).data
+                if self.model_name in ['ArgImg', 'ArgSenImg', 'ArgPhrImg', 'ArgImgSelf']:
+                    # self._load_text_img_pickle_index(i)
+                    # if task == 'dev':
+                    #     img_pickle = self.img_pickle_dev[i]
+                    # else:
+                    #     img_pickle = self.img_pickle_test[i]
+                    self._load_text_img_pickle_index(i)
+                    # img_pickle = self.img_pkl
+                    output = self.classifier(self.encoder(a1, a2, arg1_sen, arg2_sen,
+                                                          self.text_pkl,
+                                                          self.img_pkl,
+                                                          self.phrase_text_pkl,
+                                                          self.phrase_img_pkl, i, task=task))
+                else:
+                    output = self.classifier(self.encoder(a1, a2))
+                _, output_sense = torch.max(output, 1)
+                assert output_sense.size() == sense1.size()
+                gold_sense = sense1
+                mask = (output_sense == sense2)
+                gold_sense[mask] = sense2[mask]
+                tmp = (output_sense == gold_sense).long()
+                correct_n += torch.sum(tmp).data
 
-            output_list.append(output_sense)
-            gold_list.append(gold_sense)
+                output_list.append(output_sense)
+                gold_list.append(gold_sense)
 
-            loss = self.criterion(output, gold_sense)
-            total_loss += loss.data * gold_sense.size(0)
+                loss = self.criterion(output, gold_sense)
+                total_loss += loss.data * gold_sense.size(0)
 
-        output_s = torch.cat(output_list)
-        gold_s = torch.cat(gold_list)
-        if self.conf.four_or_eleven == 2:
-            f1 = f1_score(gold_s.cpu().data.numpy(), output_s.cpu().data.numpy(), average='binary')
-        else:
-            f1 = f1_score(gold_s.cpu().data.numpy(), output_s.cpu().data.numpy(), average='macro')
+                output_s = torch.cat(output_list)
+                gold_s = torch.cat(gold_list)
+                if self.conf.four_or_eleven == 2:
+                    f1 = f1_score(gold_s.cpu().data.numpy(), output_s.cpu().data.numpy(), average='binary')
+                else:
+                    f1 = f1_score(gold_s.cpu().data.numpy(), output_s.cpu().data.numpy(), average='macro')
+            except Exception as e:
+                print(e)
+                logging.debug(e)
+                continue
+
         return total_loss[0] / n, correct_n[0].float() / n, f1
 
     def eval(self, pre):
@@ -237,3 +317,66 @@ class ModelBuilder(object):
         self._load_model(self.classifier, pre + '_cparams.pkl')
         test_loss, test_acc, f1 = self._eval('test')
         self._print_eval('test', test_loss, test_acc, f1)
+
+    def _load_text_img_pickle_all(self, task='train'):
+        img_pickle = []
+        if task == 'dev':
+            data = self.data.dev_loader
+            n = self.data.dev_size
+        elif task == 'test':
+            data = self.data.test_loader
+            n = self.data.test_size
+        else:
+            data = self.data.train_loader
+            n = self.data.train_loader
+
+        for i, (a1, a2, sense1, sense2, arg1_sen, arg2_sen) in enumerate(data):
+            self._load_text_img_pickle_index(i, task)
+            img_pickle.append(self.img_pkl)
+
+        return np.array(img_pickle)
+
+    def _load_text_img_pickle_index(self, index, task='train'):
+        root_dir = '/home/wangjian/projects/RNNImageIDRR/data/text_img'
+        if task != 'train':
+            text_pkl_path = root_dir + '/text_' + task + '_' + str(index) + '.pkl'
+            img_pkl_path = root_dir + '/img_' + task + '_' + str(index) + '.pkl'
+            phrase_text_pkl_path = root_dir + '/phrase_text_' + task + '_' + str(index) + '.pkl'
+            phrase_img_pkl_path = root_dir + '/phrase_img_' + task + '_' + str(index) + '.pkl'
+        else:
+            text_pkl_path = root_dir + '/text_' + str(index) + '.pkl'
+            img_pkl_path = root_dir + '/img_' + str(index) + '.pkl'
+            phrase_text_pkl_path = root_dir + '/phrase_text_' + str(index) + '.pkl'
+            phrase_img_pkl_path = root_dir + '/phrase_img_' + str(index) + '.pkl'
+        self.text_pkl = []
+        self.img_pkl = []
+        self.phrase_text_pkl = []
+        self.phrase_img_pkl = []
+        if self.model_name in ['ArgImg', 'ArgSenImg', 'ArgPhrImg', 'ArgImgSelf']:
+            if self.model_name in ['ArgImg', 'ArgSenImg', 'ArgImgSelf']:
+                if os.path.exists(text_pkl_path) and os.path.exists(img_pkl_path):
+                    # print(img_pkl_path)
+                    # logging.debug(img_pkl_path)
+                    # with open(text_pkl_path, 'rb') as f:
+                    #     try:
+                    #         while True:
+                    #             self.text_pkl.append(pickle.load(f))
+                    #     except:
+                    #         pass
+                    with h5py.File(img_pkl_path) as f:
+                        img = f['img_features'][:]
+                        img = img.reshape((len(img), 3, 256, 256))
+                        self.img_pkl.extend(img)
+
+            if self.model_name in ['ArgImg', 'ArgPhrImg', 'ArgImgSelf']:
+                if os.path.exists(phrase_text_pkl_path) and os.path.exists(phrase_img_pkl_path):
+                    with open(phrase_text_pkl_path, 'rb') as f:
+                        try:
+                            while True:
+                                self.phrase_text_pkl.append(pickle.load(f))
+                        except:
+                            pass
+                    with h5py.File(phrase_img_pkl_path) as f:
+                        img = f['img_features'][:]
+                        img = img.reshape((len(img), 3, 256, 256))
+                        self.phrase_img_pkl.extend(img)

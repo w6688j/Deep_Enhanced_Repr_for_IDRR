@@ -303,7 +303,9 @@ class PreData(object):
             self._text2i(self.arg1_train_r),
             self._text2i(self.arg2_train_r),
             self._sense2i(self.sense_train_r),
-            self._conn2i(self.conn_train_r)
+            self._conn2i(self.conn_train_r),
+            [self.arg1_train_r],
+            [self.arg2_train_r]
         ]
         print('pre dev/test data...')
         dev_data = [
@@ -311,12 +313,16 @@ class PreData(object):
             self._text2i(self.arg2_dev_r),
             self._sense2i(self.sense1_dev_r),
             self._sense2i(self.sense2_dev_r),
+            [self.arg1_dev_r],
+            [self.arg2_dev_r]
         ]
         test_data = [
             self._text2i(self.arg1_test_r),
             self._text2i(self.arg2_test_r),
             self._sense2i(self.sense1_test_r),
             self._sense2i(self.sense2_test_r),
+            [self.arg1_test_r],
+            [self.arg2_test_r]
         ]
         print('saving data...')
         if self.corpus_splitting == 1:

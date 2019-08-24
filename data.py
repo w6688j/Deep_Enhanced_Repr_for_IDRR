@@ -4,10 +4,11 @@ import torch.utils.data as torchdata
 class Dataset(torchdata.Dataset):
     def __init__(self, data_path):
         super(Dataset, self).__init__()
-        self.d1, self.d2, self.d3, self.d4 = torch.load(data_path)
+        self.d1, self.d2, self.d3, self.d4, self.d5, self.d6 = torch.load(data_path)
 
     def __getitem__(self, index):
-        return self.d1[index], self.d2[index], self.d3[index], self.d4[index]
+        return self.d1[index], self.d2[index], self.d3[index], self.d4[index], ' '.join(self.d5[0][index]), ' '.join(
+            self.d6[0][index])
 
     def __len__(self):
         return len(self.d4)
